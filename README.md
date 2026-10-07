@@ -25,7 +25,7 @@ Infinity Hack '26 · AI Project Manager challenge. An admin pastes a meeting tra
 - Frontend: Next.js 16 (App Router, React 19, TypeScript)
 - Backend: Python 3.11+ · FastAPI · psycopg 3 (with a connection pool)
 - Database: PostgreSQL 17 on Supabase
-- AI: OpenRouter chat completions, primary model `[AI_MODEL]` with backup `[AI_BACKUP_MODEL]`, `temperature=0`, JSON output
+- AI: Groq (OpenAI-compatible API), primary `openai/gpt-oss-120b`, backup `qwen/qwen3.8-27b`, `temperature=0`, strict JSON-schema output. OpenRouter also works by setting `AI_API_URL`.
 - Auth: bcrypt password hashes. Login returns a JWT (12 h) holding only the user ID. The backend loads the user and role from the database on every request and never trusts a role or ID sent by the client.
 
 ## Links
@@ -77,7 +77,8 @@ python ai_extract.py              # runs the sample transcript and prints the ex
 | Variable | Purpose | Where configured |
 | --- | --- | --- |
 | `DATABASE_URL` | Postgres connection string (Supabase pooler, port 6543) | backend |
-| `OPENROUTER_API_KEY` | AI provider key | backend only |
+| `OPENROUTER_API_KEY` | AI provider key (a Groq `gsk_` key or an OpenRouter key) | backend only |
+| `AI_API_URL` | Optional chat-completions URL (default: Groq for `gsk_` keys, otherwise OpenRouter) | backend |
 | `AI_MODEL` | Primary OpenRouter model ID | backend |
 | `AI_BACKUP_MODEL` | Model tried if the primary fails (optional) | backend |
 | `JWT_SECRET` | Signs login tokens | backend |

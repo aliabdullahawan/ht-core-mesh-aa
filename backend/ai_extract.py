@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import time
 
 import httpx
 from pydantic import ValidationError
@@ -9,7 +10,15 @@ from pydantic import ValidationError
 from schemas import Draft
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 MEETING_DATE = "2026-10-07"
+
+
+def _api_url() -> str:
+    # Any OpenAI-compatible endpoint works; Groq keys (gsk_...) default to Groq, others to OpenRouter
+    if os.environ.get("AI_API_URL"):
+        return os.environ["AI_API_URL"]
+    return GROQ_URL if os.environ.get("OPENROUTER_API_KEY", "").startswith("gsk_") else OPENROUTER_URL
 
 
 class AIError(Exception):
@@ -58,21 +67,56 @@ def build_directory(users: list[dict]) -> str:
     )
 
 
+def _strict(props: dict) -> dict:
+    return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
+
+
+# Strict JSON schema: the provider forces the model's output into exactly this shape
+DRAFT_SCHEMA = _strict({
+    "projects": {"type": "array", "items": _strict({
+        "name": {"type": "string"},
+        "clientName": {"type": "string"},
+        "description": {"type": "string"},
+        "managerId": {"type": "string"},
+        "deadline": {"type": "string"},
+        "tasks": {"type": "array", "items": _strict({
+            "title": {"type": "string"},
+            "description": {"type": "string"},
+            "assigneeId": {"type": "string"},
+            "deadline": {"type": "string"},
+            "estimatedHours": {"type": "number"},
+        })},
+    })},
+})
+
+
 def _call_model(model: str, system: str, transcript: str) -> str:
-    resp = httpx.post(
-        OPENROUTER_URL,
-        headers={"Authorization": f"Bearer {os.environ.get('OPENROUTER_API_KEY', '')}"},
-        json={
-            "model": model,
-            "temperature": 0,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": transcript},
-            ],
+    body = {
+        "model": model,
+        "temperature": 0,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "draft", "strict": True, "schema": DRAFT_SCHEMA},
         },
-        timeout=60,
-    )
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": transcript},
+        ],
+    }
+    headers = {"Authorization": f"Bearer {os.environ.get('OPENROUTER_API_KEY', '')}"}
+    resp = httpx.post(_api_url(), headers=headers, json=body, timeout=90)
+    if resp.status_code == 429:
+        # Free-tier rate limit: wait as long as the provider asks (capped) and try once more
+        try:
+            wait = float(resp.headers.get("retry-after", 10))
+        except ValueError:
+            wait = 10
+        time.sleep(min(wait, 25))
+        resp = httpx.post(_api_url(), headers=headers, json=body, timeout=90)
+    if resp.status_code == 400:
+        # Model doesn't support strict schemas: fall back to plain JSON mode
+        body["response_format"] = {"type": "json_object"}
+        resp = httpx.post(_api_url(), headers=headers, json=body, timeout=90)
     resp.raise_for_status()
     content = resp.json()["choices"][0]["message"]["content"]
     if not content:
@@ -126,20 +170,21 @@ def extract(transcript: str, directory: list[dict]) -> Draft:
         raise AIError("AI is not configured (set OPENROUTER_API_KEY and AI_MODEL)")
 
     system = SYSTEM_PROMPT.format(meeting_date=MEETING_DATE, directory=build_directory(directory))
-    data, last_error = None, None
+    invalid, last_error = None, None
+    # Try the primary model, then the backup if the call fails or the output doesn't fit the Draft shape
     for model in [m for m in (primary, backup) if m]:
         try:
             data = _parse_json(_call_model(model, system, transcript))
-            break
         except (httpx.HTTPError, KeyError, IndexError, json.JSONDecodeError, AIError) as e:
             last_error = e
-    if data is None:
-        raise AIError(f"AI request failed: {last_error}")
-
-    try:
-        return Draft.model_validate(data)
-    except ValidationError as e:
-        raise DraftInvalid(readable_errors(e, data if isinstance(data, dict) else {}))
+            continue
+        try:
+            return Draft.model_validate(data)
+        except ValidationError as e:
+            invalid = DraftInvalid(readable_errors(e, data if isinstance(data, dict) else {}))
+    if invalid:
+        raise invalid
+    raise AIError(f"AI request failed: {last_error}")
 
 
 if __name__ == "__main__":
