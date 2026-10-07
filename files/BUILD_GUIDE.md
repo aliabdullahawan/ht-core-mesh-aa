@@ -85,7 +85,6 @@ FRONTEND_URL=http://localhost:3000
 # frontend/.env.example
 NEXT_PUBLIC_API_URL=http://localhost:8000
 ```
-
 Only `NEXT_PUBLIC_API_URL` goes in the frontend. The AI key and database URL stay backend-only.
 
 **Step 0.5 — Write `backend/schemas.py` together (Both)**
