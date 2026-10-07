@@ -31,6 +31,8 @@ function TranscriptForm() {
     } catch (e) {
       if (e instanceof ApiError && e.status === 422 && Array.isArray(e.body?.errors)) setErrors(e.body.errors);
       else if (e instanceof ApiError && e.status === 403) setErrors(["Only the admin can create projects from a transcript."]);
+      else if (e instanceof ApiError && typeof e.body?.detail === "string")
+        setErrors([`AI service failed, please try again. (${e.body.detail})`]);
       else setErrors(["AI service failed, please try again."]);
     } finally {
       setLoading(false);
